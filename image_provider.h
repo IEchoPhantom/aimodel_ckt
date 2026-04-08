@@ -19,6 +19,15 @@ limitations under the License.
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/micro/micro_error_reporter.h"
 
+#include <stdint.h>
+
+struct SlotRoi {
+    uint16_t x;
+    uint16_t y;
+    uint16_t width;
+    uint16_t height;
+};
+
 // This is an abstraction around an image source like a camera, and is
 // expected to return 8-bit sample data.  The assumption is that this will be
 // called in a low duty-cycle fashion in a low-power application.  In these
@@ -35,5 +44,10 @@ limitations under the License.
 // ensure there's a specialized implementation that accesses hardware APIs.
 TfLiteStatus GetImage(tflite::ErrorReporter* error_reporter, int image_width,
                       int image_height, int channels, int8_t* image_data);
+
+TfLiteStatus InitCamera(tflite::ErrorReporter* error_reporter);
+void SetActiveSlot(uint8_t slot_index);
+uint8_t GetActiveSlot();
+const SlotRoi* GetSlotRoiTable();
 
 #endif  // TENSORFLOW_LITE_MICRO_EXAMPLES_PERSON_DETECTION_IMAGE_PROVIDER_H_

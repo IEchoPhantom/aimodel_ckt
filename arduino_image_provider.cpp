@@ -15,25 +15,7 @@
 
 #include "image_provider.h"
 
-/*
-   The sample requires the following third-party libraries to be installed and
-   configured:
-
-   Arducam
-   -------
-   1. Download https://github.com/ArduCAM/Arduino and copy its `ArduCAM`
-      subdirectory into `Arduino/libraries`. Commit #e216049 has been tested
-      with this code.
-   2. Edit `Arduino/libraries/ArduCAM/memorysaver.h` and ensure that
-      "#define OV2640_MINI_2MP_PLUS" is not commented out. Ensure all other
-      defines in the same section are commented out.
-
-   JPEGDecoder
-   -----------
-   1. Install "JPEGDecoder" 1.8.0 from the Arduino library manager.
-   2. Edit "Arduino/Libraries/JPEGDecoder/src/User_Config.h" and comment out
-      "#define LOAD_SD_LIBRARY" and "#define LOAD_SDFAT_LIBRARY".
-*/
+#include "model_settings.h"
 
 #if defined(ARDUINO) && !defined(ARDUINO_ARDUINO_NANO33BLE)
 #define ARDUINO_EXCLUDE_CODE
@@ -42,115 +24,145 @@
 #ifndef ARDUINO_EXCLUDE_CODE
 
 #include <Arduino.h>
-#include <Arduino_OV767X.h>
 
-const int kCaptureWidth = 320;
-const int kCaptureHeight = 240;
+#include "esp_camera.h"
 
-byte captured_data[kCaptureWidth * kCaptureHeight * 2]; // QVGA: 320x240 X 2 bytes per pixel (RGB565)
+namespace {
+constexpr int kCaptureWidth = 160;
+constexpr int kCaptureHeight = 120;
 
-// Crop image and convert it to grayscale
-TfLiteStatus ProcessImage(
-  tflite::ErrorReporter* error_reporter,
-  int image_width, int image_height,
-  int8_t* image_data) {
- //  Serial.println("begging image process");
-  //  const int skip_start_x = ceil((kCaptureWidth - image_width) / 2); // 40.5
-  //  const int skip_start_y = ceil((kCaptureHeight - image_height) / 2); // 24
-  //  const int skip_end_x_index = (kCaptureWidth - skip_start_x); // (176 - 40) = 135
-  //  const int skip_end_y_index = (kCaptureHeight - skip_start_y); // 144 - 24 = 120
-  const int imgSize = 96;
+bool g_camera_initialized = false;
+uint8_t g_active_slot = 0;
 
-  // Color of the current pixel
-  uint16_t color;
-  for (int y = 0; y < imgSize; y++) {
-    for (int x = 0; x < imgSize; x++) {
-      int currentCapX = floor(map(x, 0, imgSize, 40, kCaptureWidth - 80));
-      int currentCapY = floor(map(y, 0, imgSize, 0, kCaptureHeight));
-      // Read the color of the pixel as 16-bit integer
-      int read_index = (currentCapY * kCaptureWidth + currentCapX) * 2;//(y * kCaptureWidth + x) * 2;
-      int i2 = (currentCapY * kCaptureWidth + currentCapX + 1) * 2;
-      int i3 = ((currentCapY + 1) * kCaptureWidth + currentCapX) * 2;
-      int i4 = ((currentCapY + 1) * kCaptureWidth + currentCapX + 1) * 2;
+const SlotRoi kSlotRois[kParkingSlotCount] = {
+    {0, 0, 80, 60},
+    {80, 0, 80, 60},
+    {0, 60, 80, 60},
+    {80, 60, 80, 60},
+};
 
-      uint8_t high_byte = captured_data[read_index];
-      uint8_t low_byte = captured_data[read_index + 1];
+camera_config_t BuildCameraConfig() {
+  camera_config_t config;
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = 5;
+  config.pin_d1 = 18;
+  config.pin_d2 = 19;
+  config.pin_d3 = 21;
+  config.pin_d4 = 36;
+  config.pin_d5 = 39;
+  config.pin_d6 = 34;
+  config.pin_d7 = 35;
+  config.pin_xclk = 0;
+  config.pin_pclk = 22;
+  config.pin_vsync = 25;
+  config.pin_href = 23;
+  config.pin_sccb_sda = 26;
+  config.pin_sccb_scl = 27;
+  config.pin_pwdn = 32;
+  config.pin_reset = -1;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_GRAYSCALE;
+  config.frame_size = FRAMESIZE_QQVGA;
+  config.jpeg_quality = 12;
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_LATEST;
+  return config;
+}
 
-      color = ((uint16_t)high_byte << 8) | low_byte;
-      // Extract the color values (5 red bits, 6 green, 5 blue)
-      uint8_t r, g, b;
-      r = ((color & 0xF800) >> 11) * 8;
-      g = ((color & 0x07E0) >> 5) * 4;
-      b = ((color & 0x001F) >> 0) * 8;
-      // Convert to grayscale by calculating luminance
-      // See https://en.wikipedia.org/wiki/Grayscale for magic numbers
-      float gray_value = (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
-
-      if (i2 > 0 && i2 < capDataLen - 1) {
-        high_byte = captured_data[i2];
-        low_byte = captured_data[i2 + 1];
-        color = ((uint16_t)high_byte << 8) | low_byte;
-        r = ((color & 0xF800) >> 11) * 8;
-        g = ((color & 0x07E0) >> 5) * 4;
-        b = ((color & 0x001F) >> 0) * 8;
-        gray_value += (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
-      }
-      if (i3 > 0 && i3 < capDataLen - 1) {
-        high_byte = captured_data[i3];
-        low_byte = captured_data[i3 + 1];
-        color = ((uint16_t)high_byte << 8) | low_byte;
-        r = ((color & 0xF800) >> 11) * 8;
-        g = ((color & 0x07E0) >> 5) * 4;
-        b = ((color & 0x001F) >> 0) * 8;
-        gray_value += (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
-      }
-
-      if (i4 > 0 && i4 < capDataLen - 1) {
-        high_byte = captured_data[i4];
-        low_byte = captured_data[i4 + 1];
-        color = ((uint16_t)high_byte << 8) | low_byte;
-        r = ((color & 0xF800) >> 11) * 8;
-        g = ((color & 0x07E0) >> 5) * 4;
-        b = ((color & 0x001F) >> 0) * 8;
-        gray_value += (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
-      }
-
-      gray_value = gray_value / 4;
-      
-      // Convert to signed 8-bit integer by subtracting 128.
-      gray_value -= 128;
-      //      // The index of this pixel` in our flat output buffer
-      int index = y * image_width + x;
-      image_data[index] = static_cast<int8_t>(gray_value);
-//      delayMicroseconds(10);
-    }
+TfLiteStatus EnsureCameraInitialized(tflite::ErrorReporter* error_reporter) {
+  if (g_camera_initialized) {
+    return kTfLiteOk;
   }
-//  flushCap();
-  //  Serial.println("processed image");
-  //  Serial.println("processed image");
+
+  camera_config_t config = BuildCameraConfig();
+  const esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK) {
+    TF_LITE_REPORT_ERROR(error_reporter, "esp_camera_init failed: %d", err);
+    return kTfLiteError;
+  }
+
+  sensor_t* sensor = esp_camera_sensor_get();
+  if (sensor != nullptr) {
+    sensor->set_vflip(sensor, 1);
+    sensor->set_hmirror(sensor, 0);
+    sensor->set_brightness(sensor, 0);
+    sensor->set_contrast(sensor, 0);
+  }
+
+  g_camera_initialized = true;
   return kTfLiteOk;
 }
-// Get an image from the camera module
+
+void ExtractAndQuantizeSlot(const camera_fb_t* fb, const SlotRoi& roi,
+                            int image_width, int image_height,
+                            int8_t* image_data) {
+  const int src_width = fb->width;
+  const int src_height = fb->height;
+  const uint8_t* src = fb->buf;
+
+  for (int y = 0; y < image_height; ++y) {
+    const int src_y = roi.y + ((y * roi.height) / image_height);
+    const int clamped_y = (src_y >= src_height) ? (src_height - 1) : src_y;
+    for (int x = 0; x < image_width; ++x) {
+      const int src_x = roi.x + ((x * roi.width) / image_width);
+      const int clamped_x = (src_x >= src_width) ? (src_width - 1) : src_x;
+      const uint8_t gray = src[clamped_y * src_width + clamped_x];
+      image_data[(y * image_width) + x] = static_cast<int8_t>(gray - 128);
+    }
+  }
+}
+}  // namespace
+
+TfLiteStatus InitCamera(tflite::ErrorReporter* error_reporter) {
+  return EnsureCameraInitialized(error_reporter);
+}
+
+void SetActiveSlot(uint8_t slot_index) {
+  if (slot_index >= kParkingSlotCount) {
+    g_active_slot = 0;
+    return;
+  }
+  g_active_slot = slot_index;
+}
+
+uint8_t GetActiveSlot() {
+  return g_active_slot;
+}
+
+const SlotRoi* GetSlotRoiTable() {
+  return kSlotRois;
+}
+
 TfLiteStatus GetImage(tflite::ErrorReporter* error_reporter, int image_width,
                       int image_height, int channels, int8_t* image_data) {
-  static bool g_is_camera_initialized = false;
-  if (!g_is_camera_initialized) {
-   if (!Camera.begin(QVGA, RGB565, 1)) {
-
-      return kTfLiteError;
-    }
-    g_is_camera_initialized = true;
+  if (channels != 1) {
+    TF_LITE_REPORT_ERROR(error_reporter, "Only grayscale input is supported");
+    return kTfLiteError;
   }
 
-    Camera.readFrame(captured_data);
-
-  TfLiteStatus decode_status = ProcessImage(
-                                 error_reporter, image_width, image_height, image_data);
-  if (decode_status != kTfLiteOk) {
-    TF_LITE_REPORT_ERROR(error_reporter, "DecodeAndProcessImage failed");
-    return decode_status;
+  if (EnsureCameraInitialized(error_reporter) != kTfLiteOk) {
+    return kTfLiteError;
   }
 
+  camera_fb_t* fb = esp_camera_fb_get();
+  if (fb == nullptr) {
+    TF_LITE_REPORT_ERROR(error_reporter, "esp_camera_fb_get failed");
+    return kTfLiteError;
+  }
+
+  if (fb->format != PIXFORMAT_GRAYSCALE || fb->width != kCaptureWidth ||
+      fb->height != kCaptureHeight) {
+    TF_LITE_REPORT_ERROR(error_reporter, "Unexpected frame format %d (%dx%d)",
+                         fb->format, fb->width, fb->height);
+    esp_camera_fb_return(fb);
+    return kTfLiteError;
+  }
+
+  const SlotRoi& roi = kSlotRois[g_active_slot];
+  ExtractAndQuantizeSlot(fb, roi, image_width, image_height, image_data);
+  esp_camera_fb_return(fb);
   return kTfLiteOk;
 }
 

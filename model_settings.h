@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_LITE_MICRO_EXAMPLES_PERSON_DETECTION_MODEL_SETTINGS_H_
-#define TENSORFLOW_LITE_MICRO_EXAMPLES_PERSON_DETECTION_MODEL_SETTINGS_H_
+#ifndef TENSORFLOW_LITE_MICRO_EXAMPLES_PARKING_MODEL_SETTINGS_H_
+#define TENSORFLOW_LITE_MICRO_EXAMPLES_PARKING_MODEL_SETTINGS_H_
 
 // Keeping these as constant expressions allow us to allocate fixed-sized arrays
 // on the stack for our working memory.
@@ -27,9 +27,13 @@ constexpr int kNumChannels = 1;
 
 constexpr int kMaxImageSize = kNumCols * kNumRows * kNumChannels;
 
-constexpr int kCategoryCount = 4;
-constexpr int kPersonIndex = 1;
-constexpr int kNotAPersonIndex = 0;
-extern const char* kCategoryLabels[kCategoryCount];
+constexpr int kCategoryCount = 2;
+constexpr int kEmptyIndex = 0;
+constexpr int kOccupiedIndex = 1;
 
-#endif  // TENSORFLOW_LITE_MICRO_EXAMPLES_PERSON_DETECTION_MODEL_SETTINGS_H_
+constexpr int kParkingSlotCount = 4;
+
+extern const char* kCategoryLabels[kCategoryCount];
+extern const char* kSlotLabels[kParkingSlotCount];
+
+#endif  // TENSORFLOW_LITE_MICRO_EXAMPLES_PARKING_MODEL_SETTINGS_H_

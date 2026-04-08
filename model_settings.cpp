@@ -16,5 +16,9 @@ limitations under the License.
 #include "model_settings.h"
 
 const char* kCategoryLabels[kCategoryCount] = {
-    "Number 1","Number 2","Number 3","Number 4",
+    "empty", "occupied",
+};
+
+const char* kSlotLabels[kParkingSlotCount] = {
+    "slot1", "slot2", "slot3", "slot4",
 };

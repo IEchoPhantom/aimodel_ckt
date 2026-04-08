@@ -1,0 +1,25 @@
+# Local Python environment
+.venv/
+
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local runtime files
+*.log
+*.tmp
+*.swp
+
+# Optional local model/data exports
+# Uncomment if you want to keep these out of git.
+# *.tflite
+# captures/
+# data/
