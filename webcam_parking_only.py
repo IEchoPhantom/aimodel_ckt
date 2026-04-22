@@ -10,6 +10,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera", type=int, default=0, help="Webcam index")
     parser.add_argument("--slots", type=int, default=4, choices=[1, 2, 4], help="Number of parking slots")
     parser.add_argument("--model", type=str, default="", help="Optional quantized .tflite model")
+    parser.add_argument(
+        "--reference",
+        type=str,
+        default="",
+        help="Optional reference image of the empty parking scene",
+    )
     parser.add_argument("--show-rois", action="store_true", help="Draw slot regions on screen")
     parser.add_argument("--mirror", action="store_true", help="Mirror the preview window")
     return parser
@@ -54,6 +60,31 @@ def load_tflite(path: str):
     return interpreter, (in_info, out_info)
 
 
+def load_reference(path: str):
+    if not path:
+        return None
+
+    ref = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if ref is None:
+        return None
+    return ref
+
+
+def score_from_reference(patch: np.ndarray, reference_patch: np.ndarray) -> float:
+    patch = cv2.GaussianBlur(patch, (5, 5), 0)
+    reference_patch = cv2.GaussianBlur(reference_patch, (5, 5), 0)
+
+    diff = cv2.absdiff(patch, reference_patch)
+    mean_diff = float(np.mean(diff))
+
+    patch_std = float(np.std(patch))
+    ref_std = float(np.std(reference_patch))
+
+    # Higher score means more likely occupied.
+    score = (mean_diff * 1.7) + max(0.0, ref_std - patch_std)
+    return score
+
+
 def classify_with_model(gray: np.ndarray, rois, interpreter, io_info) -> List[str]:
     in_info, out_info = io_info
     states: List[str] = []
@@ -80,15 +111,24 @@ def classify_with_model(gray: np.ndarray, rois, interpreter, io_info) -> List[st
     return states
 
 
-def classify_with_heuristic(gray: np.ndarray, rois) -> List[str]:
+def classify_with_heuristic(gray: np.ndarray, rois, reference_gray: np.ndarray | None) -> List[str]:
     states: List[str] = []
     for x, y, w, h in rois:
         patch = gray[y : y + h, x : x + w]
         patch = cv2.resize(patch, (96, 96), interpolation=cv2.INTER_AREA)
 
-        edges = cv2.Laplacian(patch, cv2.CV_16S)
-        edge_energy = float(np.mean(np.abs(edges)))
-        state = "empty" if edge_energy >= 12.0 else "occupied"
+        if reference_gray is not None:
+            reference_patch = reference_gray[y : y + h, x : x + w]
+            reference_patch = cv2.resize(reference_patch, (96, 96), interpolation=cv2.INTER_AREA)
+            score = score_from_reference(patch, reference_patch)
+            # Tune this threshold after taking one empty reference frame.
+            state = "occupied" if score >= 18.0 else "empty"
+        else:
+            edges = cv2.Laplacian(patch, cv2.CV_16S)
+            edge_energy = float(np.mean(np.abs(edges)))
+            brightness = float(np.mean(patch))
+            score = (edge_energy * 1.6) + max(0.0, 180.0 - brightness) * 0.04
+            state = "occupied" if score >= 20.0 else "empty"
         states.append(state)
     return states
 
@@ -110,6 +150,12 @@ def main() -> int:
         return 1
 
     interpreter, io_info = load_tflite(args.model)
+    reference_gray = load_reference(args.reference)
+
+    if reference_gray is not None:
+        print("Loaded reference image for occupancy comparison")
+
+    print("Keys: q=quit, r=reload reference from current frame, s=save current frame as reference")
 
     while True:
         ok, frame = cap.read()
@@ -125,7 +171,7 @@ def main() -> int:
         if interpreter is not None and io_info is not None:
             states = classify_with_model(gray, rois, interpreter, io_info)
         else:
-            states = classify_with_heuristic(gray, rois)
+            states = classify_with_heuristic(gray, rois, reference_gray)
 
         occupied = sum(1 for state in states if state == "occupied")
         available = len(states) - occupied
@@ -146,6 +192,12 @@ def main() -> int:
 
         cv2.imshow("Parking Monitor", preview)
         key = cv2.waitKey(1) & 0xFF
+        if key == ord("s"):
+            reference_gray = gray.copy()
+            print("Saved current webcam frame as reference")
+        elif key == ord("r") and reference_gray is not None:
+            reference_gray = gray.copy()
+            print("Reloaded reference from current frame")
         if key in (27, ord('q')):
             break
 
